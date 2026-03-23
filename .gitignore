@@ -1,0 +1,11 @@
+.gradle
+build
+.idea/
+.project
+.settings/
+.classpath
+.wrangler/
+nbactions.xml
+nb-configuration.xml
+nbproject/
+*.bak
