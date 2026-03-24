@@ -352,10 +352,11 @@ public class ArianaPlugin extends Plugin
             log.info("Ariana: relay connected — sending auth token");
 
             // Send auth token as first message (post-connect authentication)
+            // Data is NOT sent here — we wait for auth_ok in onText before sending state
             try
             {
                 webSocket.sendText("{\"type\":\"auth\",\"token\":\"" + authToken + "\"}", true);
-                log.info("Ariana: auth token sent");
+                log.info("Ariana: auth token sent, waiting for auth_ok before sending data");
             }
             catch (Exception e)
             {
@@ -365,33 +366,7 @@ public class ArianaPlugin extends Plugin
             }
 
             relaySocket = webSocket;
-            relayConnected = true;
             reconnectDelay = RECONNECT_DELAY_MS; // reset backoff
-
-            // plugin connected (no panel)
-
-            // Flush buffered messages
-            int flushed = 0;
-            String msg;
-            while ((msg = messageQueue.poll()) != null)
-            {
-                try { webSocket.sendText(msg, true); flushed++; }
-                catch (Exception e) { log.debug("Flush error: {}", e.getMessage()); }
-            }
-            messageQueueBytes = 0;
-            if (flushed > 0) log.info("Ariana: flushed {} buffered messages", flushed);
-
-            // Send current state
-            try
-            {
-                String data = "{\"type\":\"connected\"," + buildAllDataInner() + "}";
-                webSocket.sendText(data, true);
-            }
-            catch (Exception e)
-            {
-                log.error("Ariana: failed to send initial state: {}", e.getMessage());
-            }
-
             webSocket.request(1);
         }
 
@@ -403,7 +378,46 @@ public class ArianaPlugin extends Plugin
             {
                 String msg = textBuffer.toString().trim();
                 textBuffer.setLength(0);
-                handleRelayMessage(webSocket, msg);
+
+                // Check for auth_ok — server confirmed auth, now safe to send data
+                if (!relayConnected && msg.contains("\"type\":\"auth_ok\""))
+                {
+                    log.info("Ariana: auth_ok received — sending initial state");
+                    relayConnected = true;
+
+                    // Flush buffered messages
+                    int flushed = 0;
+                    String queued;
+                    while ((queued = messageQueue.poll()) != null)
+                    {
+                        try { webSocket.sendText(queued, true); flushed++; }
+                        catch (Exception e) { log.debug("Flush error: {}", e.getMessage()); }
+                    }
+                    messageQueueBytes = 0;
+                    if (flushed > 0) log.info("Ariana: flushed {} buffered messages", flushed);
+
+                    // Send current state
+                    try
+                    {
+                        String state = "{\"type\":\"connected\"," + buildAllDataInner() + "}";
+                        webSocket.sendText(state, true);
+                    }
+                    catch (Exception e)
+                    {
+                        log.error("Ariana: failed to send initial state: {}", e.getMessage());
+                    }
+                }
+                else if (msg.contains("\"type\":\"auth_error\""))
+                {
+                    log.warn("Ariana: auth rejected by server: {}", msg);
+                    relayConnected = false;
+                    relaySocket = null;
+                    scheduleReconnect();
+                }
+                else
+                {
+                    handleRelayMessage(webSocket, msg);
+                }
             }
             webSocket.request(1);
             return null;
