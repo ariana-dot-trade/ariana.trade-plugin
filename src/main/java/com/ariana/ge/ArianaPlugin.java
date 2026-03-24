@@ -1543,10 +1543,30 @@ public class ArianaPlugin extends Plugin
 
         if (actor == local)
         {
-            // Player died — snapshot equipment
+            // Player died — snapshot equipment + location context
             StringBuilder sb = new StringBuilder();
             sb.append("\"type\":\"player_death\"");
             sb.append(",\"timestamp\":").append(ts);
+            sb.append(",\"regionId\":").append(lastRegionId);
+
+            // Wilderness detection: check if player is in wilderness via Varbits
+            boolean inWilderness = false;
+            try {
+                int wildyLevel = client.getVarbitValue(5963); // WILDERNESS_LEVEL varbit
+                inWilderness = wildyLevel > 0;
+                sb.append(",\"wildernessLevel\":").append(wildyLevel);
+            } catch (Exception ignored) {}
+            sb.append(",\"inWilderness\":").append(inWilderness);
+
+            // PvP world detection
+            boolean isPvpWorld = false;
+            try {
+                int worldType = client.getWorldType().stream()
+                    .mapToInt(Enum::ordinal).sum();
+                isPvpWorld = client.getWorldType().contains(net.runelite.api.WorldType.PVP);
+            } catch (Exception ignored) {}
+            sb.append(",\"isPvpWorld\":").append(isPvpWorld);
+
             sb.append(",\"equipment\":{");
             boolean first = true;
             for (Map.Entry<String, int[]> e : equipmentSlots.entrySet())
