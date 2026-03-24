@@ -77,6 +77,8 @@ public class ArianaPlugin extends Plugin
     private static final long MESSAGE_QUEUE_MAX_BYTES = 10 * 1024 * 1024; // 10MB
     private static final long RECONNECT_DELAY_MS = 5_000;
     private static final long RECONNECT_DELAY_MAX_MS = 60_000;
+    private static final int KEEPALIVE_INTERVAL_TICKS = 83; // ~50 seconds (0.6s/tick) — well under Cloudflare's ~100s idle timeout
+    private int ticksSinceLastSend = 0;
 
     @Inject
     private Client client;
@@ -451,6 +453,7 @@ public class ArianaPlugin extends Plugin
         try
         {
             ws.sendText(json, true);
+            ticksSinceLastSend = 0;
         }
         catch (Exception e)
         {
@@ -835,33 +838,44 @@ public class ArianaPlugin extends Plugin
     {
         if (itemId <= 0) return;
 
-        // Prefer WebSocket relay — navigates the already-open ariana.trade tab
-        // instead of opening a new browser tab every time
+        boolean sentViaRelay = false;
+
+        // Try WebSocket relay first — navigates the already-open ariana.trade tab
         if (relayConnected && relaySocket != null)
         {
             try
             {
                 String msg = "{\"type\":\"navigate_item\",\"itemId\":" + itemId + "}";
                 relaySocket.sendText(msg, true);
+                ticksSinceLastSend = 0;
+                sentViaRelay = true;
                 log.info("Ariana: sent navigate_item {} via relay", itemId);
-                return;
             }
             catch (Exception e)
             {
-                log.warn("Ariana: relay send failed, falling back to browser: {}", e.getMessage());
+                log.warn("Ariana: relay send failed (dead socket?), triggering reconnect: {}", e.getMessage());
+                // Socket is dead — clean up and reconnect
+                relaySocket = null;
+                relayConnected = false;
+                scheduleReconnect();
             }
         }
 
-        // Fallback: open in browser if relay isn't connected
-        try
+        // Always open in browser as fallback — if relay worked, this just brings
+        // the existing tab to front via the ?item= deep link (ariana.trade deduplicates).
+        // If relay failed, this ensures the user still gets the item page.
+        if (!sentViaRelay)
         {
-            String url = "https://ariana.trade?item=" + itemId;
-            java.awt.Desktop.getDesktop().browse(new java.net.URI(url));
-            log.info("Ariana: opened item {} in browser (no relay)", itemId);
-        }
-        catch (Exception e)
-        {
-            log.error("Ariana: failed to open item in browser: {}", e.getMessage());
+            try
+            {
+                String url = "https://ariana.trade?item=" + itemId;
+                java.awt.Desktop.getDesktop().browse(new java.net.URI(url));
+                log.info("Ariana: opened item {} in browser (relay unavailable)", itemId);
+            }
+            catch (Exception e)
+            {
+                log.error("Ariana: failed to open item in browser: {}", e.getMessage());
+            }
         }
     }
 
@@ -893,6 +907,25 @@ public class ArianaPlugin extends Plugin
                     // RSN resolved (no panel)
                     broadcast("{\"type\":\"health\"," + buildHealthInner() + "}");
                 }
+            }
+        }
+
+        // --- WebSocket keepalive: send a ping if no data sent recently ---
+        ticksSinceLastSend++;
+        if (ticksSinceLastSend >= KEEPALIVE_INTERVAL_TICKS && relayConnected && relaySocket != null)
+        {
+            try
+            {
+                relaySocket.sendText("{\"type\":\"ping\"}", true);
+                ticksSinceLastSend = 0;
+            }
+            catch (Exception e)
+            {
+                log.debug("Ariana: keepalive ping failed: {}", e.getMessage());
+                // Connection is dead — trigger reconnect
+                relaySocket = null;
+                relayConnected = false;
+                scheduleReconnect();
             }
         }
 
@@ -1809,6 +1842,33 @@ public class ArianaPlugin extends Plugin
 
         String option   = event.getMenuOption();
         MenuAction mact = event.getMenuAction();
+
+        // ── Game object interactions (POH furniture, altars, portals, etc.) ──
+        // Emit as "action" events with target + option for investment savings tracking
+        boolean isGameObject = (
+            mact == MenuAction.GAME_OBJECT_FIRST_OPTION ||
+            mact == MenuAction.GAME_OBJECT_SECOND_OPTION ||
+            mact == MenuAction.GAME_OBJECT_THIRD_OPTION ||
+            mact == MenuAction.GAME_OBJECT_FOURTH_OPTION ||
+            mact == MenuAction.GAME_OBJECT_FIFTH_OPTION
+        );
+        if (isGameObject)
+        {
+            String target = event.getMenuTarget();
+            if (target != null) target = target.replaceAll("<[^>]*>", "").trim(); // strip color tags
+            if (target != null && !target.isEmpty())
+            {
+                long ts = System.currentTimeMillis();
+                StringBuilder sb = new StringBuilder();
+                sb.append("\"type\":\"action\"");
+                sb.append(",\"target\":\"").append(escapeJson(target)).append("\"");
+                sb.append(",\"option\":\"").append(escapeJson(option != null ? option : "")).append("\"");
+                sb.append(",\"objectId\":").append(event.getId());
+                sb.append(",\"timestamp\":").append(ts);
+                queueEieEvent(sb.toString());
+            }
+            return;
+        }
 
         // Accept inventory widget clicks (Eat, Drink, etc.) and direct item/ground clicks
         boolean isWidgetClick = (mact == MenuAction.CC_OP || mact == MenuAction.CC_OP_LOW_PRIORITY);
