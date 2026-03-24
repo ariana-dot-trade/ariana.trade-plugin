@@ -292,14 +292,15 @@ public class ArianaPlugin extends Plugin
             return;
         }
 
-        String url = RELAY_URL + "?token=" + token.trim();
+        // Connect without token in URL — token is sent as first message after connection
+        // for better security (tokens in URLs can leak via server logs, referrer headers, etc.)
         log.info("Ariana: connecting to relay {}", RELAY_URL);
 
         try
         {
             HttpClient httpClient = HttpClient.newHttpClient();
             httpClient.newWebSocketBuilder()
-                .buildAsync(URI.create(url), new RelayListener())
+                .buildAsync(URI.create(RELAY_URL), new RelayListener(token.trim()))
                 .exceptionally(ex -> {
                     log.warn("Ariana: relay connect failed: {}", ex.getMessage());
                     scheduleReconnect();
@@ -338,11 +339,31 @@ public class ArianaPlugin extends Plugin
     private class RelayListener implements WebSocket.Listener
     {
         private final StringBuilder textBuffer = new StringBuilder();
+        private final String authToken;
+
+        RelayListener(String authToken)
+        {
+            this.authToken = authToken;
+        }
 
         @Override
         public void onOpen(WebSocket webSocket)
         {
-            log.info("Ariana: relay connected");
+            log.info("Ariana: relay connected — sending auth token");
+
+            // Send auth token as first message (post-connect authentication)
+            try
+            {
+                webSocket.sendText("{\"type\":\"auth\",\"token\":\"" + authToken + "\"}", true);
+                log.info("Ariana: auth token sent");
+            }
+            catch (Exception e)
+            {
+                log.warn("Ariana: failed to send auth token: {}", e.getMessage());
+                scheduleReconnect();
+                return;
+            }
+
             relaySocket = webSocket;
             relayConnected = true;
             reconnectDelay = RECONNECT_DELAY_MS; // reset backoff

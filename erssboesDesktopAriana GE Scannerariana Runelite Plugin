@@ -1,0 +1,36 @@
+Add regionId, wilderness level, and PvP world flags to death events
+Death events now include regionId, wildernessLevel, inWilderness,
+and isPvpWorld fields so the web app can distinguish permanent item
+losses (wilderness/PvP deaths) from recoverable gravestone deaths.
+
+
+Add regionId, wilderness level, and PvP world flags to death events
+Death events now include regionId, wildernessLevel, inWilderness,
+and isPvpWorld fields so the web app can distinguish permanent item
+losses (wilderness/PvP deaths) from recoverable gravestone deaths.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+Add game object events, WebSocket keepalive, and navigate_item resilience
+- Emit type:"action" events for GAME_OBJECT interactions (POH furniture,
+  altars, portals) with target/option/objectId for investment savings tracking
+- Add ~50s keepalive pings to prevent Cloudflare idle timeout disconnects
+- Improve navigate_item: detect dead sockets and trigger reconnect instead
+  of silently failing; fall back to browser open when relay unavailable
+
+
+Add game object events, WebSocket keepalive, and navigate_item resilience
+- Emit type:"action" events for GAME_OBJECT interactions (POH furniture,
+  altars, portals) with target/option/objectId for investment savings tracking
+- Add ~50s keepalive pings to prevent Cloudflare idle timeout disconnects
+- Improve navigate_item: detect dead sockets and trigger reconnect instead
+  of silently failing; fall back to browser open when relay unavailable
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+Update LICENSE
+
+Update LICENSE
+
+ariana.trade RuneLite plugin - initial commit
+
