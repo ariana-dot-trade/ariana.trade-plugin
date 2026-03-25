@@ -454,43 +454,12 @@ public class ArianaPlugin extends Plugin
                 try { webSocket.sendText("{\"type\":\"health\"," + buildHealthInner() + "}", true); } catch (Exception e) { /* ignore */ }
                 break;
             case "bank":
-                // Fallback: if bankItems is empty, try reading directly from client
-                if (bankItems.isEmpty() && loggedIn)
-                {
-                    log.info("Ariana: bank request but bankItems empty — trying direct client read");
-                    try
-                    {
-                        ItemContainer bankContainer = client.getItemContainer(InventoryID.BANK);
-                        if (bankContainer != null)
-                        {
-                            updateBankData(bankContainer);
-                            log.info("Ariana: Direct bank read got {} items", bankItems.size());
-                        }
-                        else
-                        {
-                            log.info("Ariana: Direct bank read returned null (bank not opened yet)");
-                        }
-                    }
-                    catch (Exception e) { log.warn("Ariana: Direct bank read failed: {}", e.getMessage()); }
-                }
+                // NOTE: Do NOT call client.getItemContainer() here — this runs on the WS thread.
+                // Bank data is populated by onItemContainerChanged (client thread) and
+                // direct-read on login in onGameStateChanged.
                 try { webSocket.sendText("{\"type\":\"bank\"," + buildBankInner() + "}", true); } catch (Exception e) { /* ignore */ }
                 break;
             case "inventory":
-                // Fallback: if inventoryItems is empty, try reading directly from client
-                if (inventoryItems.isEmpty() && loggedIn)
-                {
-                    log.info("Ariana: inventory request but inventoryItems empty — trying direct client read");
-                    try
-                    {
-                        ItemContainer invContainer = client.getItemContainer(InventoryID.INVENTORY);
-                        if (invContainer != null)
-                        {
-                            updateInventoryData(invContainer);
-                            log.info("Ariana: Direct inventory read got {} items", inventoryItems.size());
-                        }
-                    }
-                    catch (Exception e) { log.warn("Ariana: Direct inventory read failed: {}", e.getMessage()); }
-                }
                 try { webSocket.sendText("{\"type\":\"inventory\"," + buildInventoryInner() + "}", true); } catch (Exception e) { /* ignore */ }
                 break;
             case "equipment":
@@ -1487,37 +1456,9 @@ public class ArianaPlugin extends Plugin
 
     private String buildAllDataInner()
     {
-        // Fallback: if containers are empty but player is logged in, try direct client read
-        if (loggedIn)
-        {
-            if (bankItems.isEmpty())
-            {
-                try
-                {
-                    ItemContainer bc = client.getItemContainer(InventoryID.BANK);
-                    if (bc != null) { updateBankData(bc); log.info("Ariana: buildAll fallback got {} bank items", bankItems.size()); }
-                }
-                catch (Exception e) { /* ignore */ }
-            }
-            if (inventoryItems.isEmpty())
-            {
-                try
-                {
-                    ItemContainer ic = client.getItemContainer(InventoryID.INVENTORY);
-                    if (ic != null) { updateInventoryData(ic); log.info("Ariana: buildAll fallback got {} inventory items", inventoryItems.size()); }
-                }
-                catch (Exception e) { /* ignore */ }
-            }
-            if (equipmentSlots.isEmpty())
-            {
-                try
-                {
-                    ItemContainer ec = client.getItemContainer(InventoryID.EQUIPMENT);
-                    if (ec != null) { updateEquipmentData(ec); log.info("Ariana: buildAll fallback got {} equipment slots", equipmentSlots.size()); }
-                }
-                catch (Exception e) { /* ignore */ }
-            }
-        }
+        // NOTE: Do NOT call client.getItemContainer() here — this method is called from
+        // the WebSocket thread (onText/handleRelayMessage), not the game client thread.
+        // Direct client reads are done in onGameStateChanged(LOGGED_IN) instead.
         return "\"health\":{" + buildHealthInner() + "}," +
             "\"bank\":{" + buildBankInner() + "}," +
             "\"inventory\":{" + buildInventoryInner() + "}," +
