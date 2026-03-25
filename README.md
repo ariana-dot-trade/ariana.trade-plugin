@@ -36,5 +36,3 @@ The plugin connects to the ariana.trade relay server (`wss://api.ariana.trade/re
 
 - **Dashboard**: [ariana.trade](https://ariana.trade)
 - **API Status**: [api.ariana.trade/prices/status](https://api.ariana.trade/prices/status)
-
--Claude Code Used in development-

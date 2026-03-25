@@ -52,7 +52,6 @@ import net.runelite.api.MenuEntry;
 import net.runelite.api.widgets.WidgetInfo;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -950,7 +949,7 @@ public class ArianaPlugin extends Plugin
                 {
                     playerName = name;
                     nameResolutionTicks = MAX_NAME_TICKS;
-                    log.info("Player name resolved on tick {}: {}", nameResolutionTicks, playerName);
+                    log.debug("Player name resolved on tick {}: {}", nameResolutionTicks, playerName);
                     // RSN resolved (no panel)
                     broadcast("{\"type\":\"health\"," + buildHealthInner() + "}");
                 }
