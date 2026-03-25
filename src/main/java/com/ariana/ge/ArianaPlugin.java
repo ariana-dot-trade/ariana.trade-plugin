@@ -129,6 +129,7 @@ public class ArianaPlugin extends Plugin
     private volatile String playerName = "";
     private volatile boolean loggedIn = false;
     private volatile boolean isMember = true; // default to true, updated on login
+    private volatile int loginContainerReadCountdown = -1; // ticks until we try direct container reads after login
 
     // ---- EIE event pipeline state ----
     // tickBuffer accumulates EIE events each tick; drained by the flush block at the end of onGameTick
@@ -744,19 +745,9 @@ public class ArianaPlugin extends Plugin
                 // offers updated (sent via relay)
             }
 
-            // Direct-read inventory, equipment, and bank containers on login
-            // (ItemContainerChanged events may not fire until the next change)
-            try
-            {
-                ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
-                if (inv != null) { updateInventoryData(inv); log.info("Login: direct-read {} inventory items", inventoryItems.size()); }
-                ItemContainer equip = client.getItemContainer(InventoryID.EQUIPMENT);
-                if (equip != null) { updateEquipmentData(equip); log.info("Login: direct-read {} equipment slots", equipmentSlots.size()); }
-                ItemContainer bank = client.getItemContainer(InventoryID.BANK);
-                if (bank != null) { updateBankData(bank); log.info("Login: direct-read {} bank items", bankItems.size()); }
-                else { log.info("Login: bank container not available (not opened yet)"); }
-            }
-            catch (Exception e) { log.warn("Login: direct container read failed: {}", e.getMessage()); }
+            // Schedule delayed container reads — containers aren't loaded yet at LOGGED_IN time.
+            // We read them a few ticks later in onGameTick when the client has fully loaded.
+            loginContainerReadCountdown = 5; // 5 game ticks (~3 seconds)
 
             broadcast("{\"type\":\"login\"," + buildAllDataInner() + "}");
 
@@ -962,6 +953,34 @@ public class ArianaPlugin extends Plugin
                     log.info("Player name resolved on tick {}: {}", nameResolutionTicks, playerName);
                     // RSN resolved (no panel)
                     broadcast("{\"type\":\"health\"," + buildHealthInner() + "}");
+                }
+            }
+        }
+
+        // --- Delayed container read after login ---
+        // Containers aren't ready at LOGGED_IN time; read them a few ticks later
+        if (loginContainerReadCountdown > 0)
+        {
+            loginContainerReadCountdown--;
+            if (loginContainerReadCountdown == 0)
+            {
+                loginContainerReadCountdown = -1;
+                log.info("Ariana: Delayed container read — reading inv/equip/bank from client");
+                boolean changed = false;
+                try
+                {
+                    ItemContainer inv = client.getItemContainer(InventoryID.INVENTORY);
+                    if (inv != null && inventoryItems.isEmpty()) { updateInventoryData(inv); changed = true; log.info("Ariana: Delayed read got {} inventory items", inventoryItems.size()); }
+                    ItemContainer equip = client.getItemContainer(InventoryID.EQUIPMENT);
+                    if (equip != null && equipmentSlots.isEmpty()) { updateEquipmentData(equip); changed = true; log.info("Ariana: Delayed read got {} equipment slots", equipmentSlots.size()); }
+                    ItemContainer bank = client.getItemContainer(InventoryID.BANK);
+                    if (bank != null && bankItems.isEmpty()) { updateBankData(bank); changed = true; log.info("Ariana: Delayed read got {} bank items", bankItems.size()); }
+                    else if (bank == null) { log.info("Ariana: Bank container still null (bank not opened this session)"); }
+                }
+                catch (Exception e) { log.warn("Ariana: Delayed container read failed: {}", e.getMessage()); }
+                if (changed)
+                {
+                    broadcast("{\"type\":\"connected\"," + buildAllDataInner() + "}");
                 }
             }
         }
