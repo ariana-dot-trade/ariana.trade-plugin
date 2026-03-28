@@ -25,7 +25,7 @@ import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GrandExchangeOfferChanged;
-import net.runelite.api.events.HitsplatApplied;
+import net.runelite.api.events.HitsplatApplied;h
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.ItemDespawned;
 import net.runelite.api.events.ItemSpawned;
@@ -64,9 +64,9 @@ import java.util.regex.Pattern;
 
 @Slf4j
 @PluginDescriptor(
-    name = "ariana.trade",
+    name = "ariana",
     description = "Syncs bank, inventory, equipment, and GE offers to ariana.trade via WebSocket",
-    tags = {"bank", "ge", "ariana", "sync", "flipping"}
+    tags = {"bank", "ge", "ariana", "sync", "flipping", "grand exchange", "prices", "gp", "trade", "merch", "merchanting", "cost"}
 )
 public class ArianaPlugin extends Plugin
 {
