@@ -49,7 +49,7 @@ import java.net.http.WebSocket;
 import javax.imageio.ImageIO;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.MenuEntry;
-import net.runelite.api.widgets.WidgetInfo;
+import net.runelite.api.widgets.InterfaceID;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -76,7 +76,7 @@ public class ArianaPlugin extends Plugin
     private static final long MESSAGE_QUEUE_MAX_BYTES = 10 * 1024 * 1024; // 10MB
     private static final long RECONNECT_DELAY_MS = 5_000;
     private static final long RECONNECT_DELAY_MAX_MS = 60_000;
-    private static final int KEEPALIVE_INTERVAL_TICKS = 83; // ~50 seconds (0.6s/tick) — well under Cloudflare's ~100s idle timeout
+    private static final int KEEPALIVE_INTERVAL_TICKS = 83; // ~50 seconds (0.6s/tick) â well under Cloudflare's ~100s idle timeout
     private int ticksSinceLastSend = 0;
 
     @Inject
@@ -102,7 +102,7 @@ public class ArianaPlugin extends Plugin
     private Thread reconnectThread = null;
 
     // Sidebar panel
-    // Sidebar panel removed — all config via wrench icon settings
+    // Sidebar panel removed â all config via wrench icon settings
     private NavigationButton navButton;
 
     // Message queue for reconnect flush
@@ -141,9 +141,9 @@ public class ArianaPlugin extends Plugin
     private final ConcurrentHashMap<String, int[]> xpAccumulator = new ConcurrentHashMap<>();
     // previousXp: skill-name -> last seen xp value
     private final ConcurrentHashMap<String, Integer> previousXp = new ConcurrentHashMap<>();
-    // prevEquipmentSlots: slot-name -> [id, qty] — snapshot for ammo diff
+    // prevEquipmentSlots: slot-name -> [id, qty] â snapshot for ammo diff
     private volatile Map<String, int[]> prevEquipmentSlots = new HashMap<>();
-    // prevInventoryItems: itemId -> qty — snapshot for inventory diff events
+    // prevInventoryItems: itemId -> qty â snapshot for inventory diff events
     private volatile Map<Integer, Integer> prevInventoryItems = new HashMap<>();
     private volatile boolean inCombat = false;
     private volatile int combatTickCount = 0;
@@ -161,14 +161,14 @@ public class ArianaPlugin extends Plugin
     private volatile int prevSpecPercent = -1;  // 0-1000 (1000 = 100%)
 
     // Phase A2: Rune pouch tracking
-    // Varbit rune index → item ID mapping
+    // Varbit rune index â item ID mapping
     private static final int[] RUNE_POUCH_RUNE_VARBITS = { 29, 1622, 1623 };
     private static final int[] RUNE_POUCH_AMOUNT_VARBITS = { 1624, 1625, 1626 };
     // Divine rune pouch has a 4th slot
     private static final int RUNE_POUCH_RUNE4_VARBIT = 14285;
     private static final int RUNE_POUCH_AMOUNT4_VARBIT = 14286;
 
-    // Varbit rune index → item ID lookup
+    // Varbit rune index â item ID lookup
     private static final int[] RUNE_INDEX_TO_ITEM_ID = {
         0,     // 0 = empty
         556,   // 1 = Air rune
@@ -214,7 +214,7 @@ public class ArianaPlugin extends Plugin
         for (int i = 0; i < 8; i++) { geOffers[i] = OfferSnapshot.EMPTY; }
         startServers();
 
-        // No sidebar panel — all settings live in the wrench icon config.
+        // No sidebar panel â all settings live in the wrench icon config.
         // Just add a navigation button that opens ariana.trade when clicked.
         BufferedImage icon;
         try
@@ -288,11 +288,11 @@ public class ArianaPlugin extends Plugin
         String token = config.relayToken();
         if (token == null || token.trim().isEmpty())
         {
-            log.info("Ariana: no relay token configured — not connecting");
+            log.info("Ariana: no relay token configured â not connecting");
             return;
         }
 
-        // Connect without token in URL — token is sent as first message after connection
+        // Connect without token in URL â token is sent as first message after connection
         // for better security (tokens in URLs can leak via server logs, referrer headers, etc.)
         log.info("Ariana: connecting to relay {}", RELAY_URL);
 
@@ -349,10 +349,10 @@ public class ArianaPlugin extends Plugin
         @Override
         public void onOpen(WebSocket webSocket)
         {
-            log.info("Ariana: relay connected — sending auth token");
+            log.info("Ariana: relay connected â sending auth token");
 
             // Send auth token as first message (post-connect authentication)
-            // Data is NOT sent here — we wait for auth_ok in onText before sending state
+            // Data is NOT sent here â we wait for auth_ok in onText before sending state
             try
             {
                 webSocket.sendText("{\"type\":\"auth\",\"token\":\"" + authToken + "\"}", true);
@@ -379,10 +379,10 @@ public class ArianaPlugin extends Plugin
                 String msg = textBuffer.toString().trim();
                 textBuffer.setLength(0);
 
-                // Check for auth_ok — server confirmed auth, now safe to send data
+                // Check for auth_ok â server confirmed auth, now safe to send data
                 if (!relayConnected && msg.contains("\"type\":\"auth_ok\""))
                 {
-                    log.info("Ariana: auth_ok received — sending initial state");
+                    log.info("Ariana: auth_ok received â sending initial state");
                     relayConnected = true;
 
                     // Flush buffered messages
@@ -454,7 +454,7 @@ public class ArianaPlugin extends Plugin
                 try { webSocket.sendText("{\"type\":\"health\"," + buildHealthInner() + "}", true); } catch (Exception e) { /* ignore */ }
                 break;
             case "bank":
-                // NOTE: Do NOT call client.getItemContainer() here — this runs on the WS thread.
+                // NOTE: Do NOT call client.getItemContainer() here â this runs on the WS thread.
                 // Bank data is populated by onItemContainerChanged (client thread) and
                 // direct-read on login in onGameStateChanged.
                 try { webSocket.sendText("{\"type\":\"bank\"," + buildBankInner() + "}", true); } catch (Exception e) { /* ignore */ }
@@ -510,12 +510,12 @@ public class ArianaPlugin extends Plugin
         long now = System.currentTimeMillis();
 
         // Inject buffered metadata into the JSON
-        // Insert after the opening '{' — all our messages start with {"type":...}
+        // Insert after the opening '{' â all our messages start with {"type":...}
         String buffered = "{\"buffered\":true,\"originalTimestamp\":" + now + "," + json.substring(1);
 
         int msgBytes = buffered.length() * 2; // rough estimate (Java chars are 2 bytes)
 
-        // Enforce size limits — drop oldest if full
+        // Enforce size limits â drop oldest if full
         while (messageQueue.size() >= MESSAGE_QUEUE_MAX ||
                (messageQueueBytes + msgBytes > MESSAGE_QUEUE_MAX_BYTES && !messageQueue.isEmpty()))
         {
@@ -541,7 +541,7 @@ public class ArianaPlugin extends Plugin
 
     /**
      * Open ariana.trade in the default browser.
-     * Called by the panel "Open ariana.trade" button — always opens.
+     * Called by the panel "Open ariana.trade" button â always opens.
      */
     private void launchAriana()
     {
@@ -569,7 +569,7 @@ public class ArianaPlugin extends Plugin
     }
 
     // ================================================================
-    // EVENT SUBSCRIBERS — Push data to connected clients
+    // EVENT SUBSCRIBERS â Push data to connected clients
     // ================================================================
 
     @Subscribe
@@ -580,7 +580,7 @@ public class ArianaPlugin extends Plugin
             id, InventoryID.BANK.getId(), InventoryID.INVENTORY.getId());
         if (id == InventoryID.BANK.getId())
         {
-            log.info("Ariana: BANK container changed — updating bank data");
+            log.info("Ariana: BANK container changed â updating bank data");
             updateBankData(event.getItemContainer());
             log.info("Ariana: Bank now has {} items", bankItems.size());
             broadcast("{\"type\":\"bank\"," + buildBankInner() + "}");
@@ -727,7 +727,7 @@ public class ArianaPlugin extends Plugin
             if (client.getLocalPlayer() != null && client.getLocalPlayer().getName() != null)
             {
                 playerName = client.getLocalPlayer().getName();
-                // panel removed — RSN is sent via WebSocket to ariana.trade
+                // panel removed â RSN is sent via WebSocket to ariana.trade
             }
 
             // Reset session profit on new login
@@ -744,7 +744,7 @@ public class ArianaPlugin extends Plugin
                 // offers updated (sent via relay)
             }
 
-            // Schedule delayed container reads — containers aren't loaded yet at LOGGED_IN time.
+            // Schedule delayed container reads â containers aren't loaded yet at LOGGED_IN time.
             // We read them a few ticks later in onGameTick when the client has fully loaded.
             loginContainerReadCountdown = 5; // 5 game ticks (~3 seconds)
 
@@ -795,12 +795,12 @@ public class ArianaPlugin extends Plugin
     }
 
     // ================================================================
-    // RIGHT-CLICK MENU — "Open in Ariana" for inventory/bank items
+    // RIGHT-CLICK MENU â "Open in Ariana" for inventory/bank items
     // ================================================================
 
     private static final String MENU_OPTION = "Open in ariana";
 
-    // Bank region IDs — common bank areas in OSRS
+    // Bank region IDs â common bank areas in OSRS
     private static final Set<Integer> BANK_REGIONS = new HashSet<>(Arrays.asList(
         12598, // Grand Exchange
         12342, // Varrock West Bank
@@ -847,11 +847,11 @@ public class ArianaPlugin extends Plugin
 
         // Only add to inventory, bank, and equipment right-click menus
         // BANK_INVENTORY_ITEMS_CONTAINER = inventory panel while bank interface is open
-        int groupId = WidgetInfo.TO_GROUP(event.getActionParam1());
-        if (groupId != WidgetInfo.INVENTORY.getGroupId()
-            && groupId != WidgetInfo.BANK_ITEM_CONTAINER.getGroupId()
-            && groupId != WidgetInfo.BANK_INVENTORY_ITEMS_CONTAINER.getGroupId()
-            && groupId != WidgetInfo.EQUIPMENT.getGroupId())
+        int groupId = (event.getActionParam1() >> 16);
+        if (groupId != InterfaceID.INVENTORY
+            && groupId != InterfaceID.BANK
+            && groupId != InterfaceID.BANK_INVENTORY
+            && groupId != InterfaceID.EQUIPMENT)
         {
             return;
         }
@@ -861,7 +861,7 @@ public class ArianaPlugin extends Plugin
         // Canonicalize: convert noted/placeholder IDs to the real base item ID
         int itemId = itemManager.canonicalize(rawItemId);
 
-        // Prevent duplicate entries — check if we already added our option
+        // Prevent duplicate entries â check if we already added our option
         for (MenuEntry entry : client.getMenuEntries())
         {
             if (MENU_OPTION.equals(entry.getOption())) return;
@@ -886,7 +886,7 @@ public class ArianaPlugin extends Plugin
 
         boolean sentViaRelay = false;
 
-        // Try WebSocket relay first — navigates the already-open ariana.trade tab
+        // Try WebSocket relay first â navigates the already-open ariana.trade tab
         if (relayConnected && relaySocket != null)
         {
             try
@@ -900,14 +900,14 @@ public class ArianaPlugin extends Plugin
             catch (Exception e)
             {
                 log.warn("Ariana: relay send failed (dead socket?), triggering reconnect: {}", e.getMessage());
-                // Socket is dead — clean up and reconnect
+                // Socket is dead â clean up and reconnect
                 relaySocket = null;
                 relayConnected = false;
                 scheduleReconnect();
             }
         }
 
-        // Always open in browser as fallback — if relay worked, this just brings
+        // Always open in browser as fallback â if relay worked, this just brings
         // the existing tab to front via the ?item= deep link (ariana.trade deduplicates).
         // If relay failed, this ensures the user still gets the item page.
         if (!sentViaRelay)
@@ -936,7 +936,7 @@ public class ArianaPlugin extends Plugin
         // Reset name resolution counter while not logged in so it re-runs on next login
         if (!loggedIn) nameResolutionTicks = 0;
 
-        // --- Name resolution (no early return — flush must always execute) ---
+        // --- Name resolution (no early return â flush must always execute) ---
         if (loggedIn
                 && (playerName == null || playerName.isEmpty() || playerName.equals("???"))
                 && nameResolutionTicks < MAX_NAME_TICKS)
@@ -964,7 +964,7 @@ public class ArianaPlugin extends Plugin
             if (loginContainerReadCountdown == 0)
             {
                 loginContainerReadCountdown = -1;
-                log.info("Ariana: Delayed container read — reading inv/equip/bank from client");
+                log.info("Ariana: Delayed container read â reading inv/equip/bank from client");
                 boolean changed = false;
                 try
                 {
@@ -996,7 +996,7 @@ public class ArianaPlugin extends Plugin
             catch (Exception e)
             {
                 log.debug("Ariana: keepalive ping failed: {}", e.getMessage());
-                // Connection is dead — trigger reconnect
+                // Connection is dead â trigger reconnect
                 relaySocket = null;
                 relayConnected = false;
                 scheduleReconnect();
@@ -1474,7 +1474,7 @@ public class ArianaPlugin extends Plugin
 
     private String buildAllDataInner()
     {
-        // NOTE: Do NOT call client.getItemContainer() here — this method is called from
+        // NOTE: Do NOT call client.getItemContainer() here â this method is called from
         // the WebSocket thread (onText/handleRelayMessage), not the game client thread.
         // Direct client reads are done in onGameStateChanged(LOGGED_IN) instead.
         return "\"health\":{" + buildHealthInner() + "}," +
@@ -1493,7 +1493,7 @@ public class ArianaPlugin extends Plugin
     }
 
     // ================================================================
-    // F4 — NPC LOOT RECEIVED
+    // F4 â NPC LOOT RECEIVED
     // ================================================================
 
     @Subscribe
@@ -1538,7 +1538,7 @@ public class ArianaPlugin extends Plugin
     }
 
     // ================================================================
-    // F5 — ITEM SPAWNED / ITEM DESPAWNED
+    // F5 â ITEM SPAWNED / ITEM DESPAWNED
     // ================================================================
 
     @Subscribe
@@ -1563,7 +1563,7 @@ public class ArianaPlugin extends Plugin
         long key = GroundItemData.tileKey(wp.getPlane(), wp.getX(), wp.getY(), realId);
         groundItems.put(key, new GroundItemData(realId, qty, wp.getPlane(),
             wp.getX(), wp.getY(), System.currentTimeMillis(), currentGameTick));
-        // No broadcast on spawn — wait for despawn/pickup confirmation
+        // No broadcast on spawn â wait for despawn/pickup confirmation
     }
 
     @Subscribe
@@ -1584,7 +1584,7 @@ public class ArianaPlugin extends Plugin
         GroundItemData data = groundItems.remove(key);
         Integer pickedUpId = pendingPickups.remove(key);
 
-        // If player clicked "Take" on this item → it is a pickup loot event
+        // If player clicked "Take" on this item â it is a pickup loot event
         if (pickedUpId != null && data != null)
         {
             int qty = data.quantity;
@@ -1597,7 +1597,7 @@ public class ArianaPlugin extends Plugin
         }
         else if (data == null)
         {
-            // Item we weren't tracking → loot_despawned (not picked up by us)
+            // Item we weren't tracking â loot_despawned (not picked up by us)
             queueEieEvent("\"type\":\"loot_despawned\"" +
                 ",\"itemId\":" + realId +
                 ",\"timestamp\":" + System.currentTimeMillis());
@@ -1605,7 +1605,7 @@ public class ArianaPlugin extends Plugin
     }
 
     // ================================================================
-    // F6 — ACTOR DEATH
+    // F6 â ACTOR DEATH
     // ================================================================
 
     @Subscribe
@@ -1620,7 +1620,7 @@ public class ArianaPlugin extends Plugin
 
         if (actor == local)
         {
-            // Player died — snapshot equipment + location context
+            // Player died â snapshot equipment + location context
             StringBuilder sb = new StringBuilder();
             sb.append("\"type\":\"player_death\"");
             sb.append(",\"timestamp\":").append(ts);
@@ -1663,7 +1663,7 @@ public class ArianaPlugin extends Plugin
         }
         else if (actor instanceof NPC && inCombat)
         {
-            // NPC death — heuristic: within 15 tiles and we're in combat
+            // NPC death â heuristic: within 15 tiles and we're in combat
             if (local != null)
             {
                 WorldPoint playerWp = local.getWorldLocation();
@@ -1684,7 +1684,7 @@ public class ArianaPlugin extends Plugin
     }
 
     // ================================================================
-    // F7 — STAT CHANGED (XP batching)
+    // F7 â STAT CHANGED (XP batching)
     // ================================================================
 
     @Subscribe
@@ -1710,7 +1710,7 @@ public class ArianaPlugin extends Plugin
     }
 
     // ================================================================
-    // F8 — CHAT MESSAGE (boss kills, PBs, collection log, slayer)
+    // F8 â CHAT MESSAGE (boss kills, PBs, collection log, slayer)
     // ================================================================
 
     private static final Pattern KC_PATTERN =
@@ -1726,7 +1726,7 @@ public class ArianaPlugin extends Plugin
     private static final Pattern VALUABLE_DROP_PATTERN =
         Pattern.compile("Valuable drop: (?<qty>[\\d,]+) x (?<item>.+?) \\((?<value>[\\d,]+) coins\\)", Pattern.CASE_INSENSITIVE);
 
-    // Bug 14B: Blowpipe check — dart type detection from in-game "Check" command
+    // Bug 14B: Blowpipe check â dart type detection from in-game "Check" command
     // OSRS format: "Darts: Adamant dart x 567. Scales: 1,234/16,383."
     // Pattern matches the blowpipe check output format
     private static final Pattern BLOWPIPE_CHECK_PATTERN =
@@ -1808,7 +1808,7 @@ public class ArianaPlugin extends Plugin
             return;
         }
 
-        // Bug 14B: Blowpipe check — dart type from "Check" command
+        // Bug 14B: Blowpipe check â dart type from "Check" command
         m = BLOWPIPE_CHECK_PATTERN.matcher(msg);
         if (m.find())
         {
@@ -1828,7 +1828,7 @@ public class ArianaPlugin extends Plugin
     }
 
     // ================================================================
-    // F2 — ANIMATION CHANGED + HITSPLAT APPLIED
+    // F2 â ANIMATION CHANGED + HITSPLAT APPLIED
     // ================================================================
 
     @Subscribe
@@ -1901,7 +1901,7 @@ public class ArianaPlugin extends Plugin
     }
 
     // ================================================================
-    // F1 — MENU OPTION CLICKED (item consumption / pickup detection)
+    // F1 â MENU OPTION CLICKED (item consumption / pickup detection)
     // ================================================================
 
     private static final Set<String> CONSUME_ACTIONS = new HashSet<>(Arrays.asList(
@@ -1910,7 +1910,7 @@ public class ArianaPlugin extends Plugin
     private static final Set<String> DESTROY_ACTIONS = new HashSet<>(Arrays.asList(
         "Destroy", "Drop", "Release", "Empty"
     ));
-    // Thrown weapons held in WEAPON slot (not AMMO slot) — need explicit tracking
+    // Thrown weapons held in WEAPON slot (not AMMO slot) â need explicit tracking
     private static final Set<Integer> THROWN_WEAPON_IDS = new HashSet<>(Arrays.asList(
         11959, // Black chinchompa
         11957, // Red chinchompa
@@ -1940,7 +1940,7 @@ public class ArianaPlugin extends Plugin
         String option   = event.getMenuOption();
         MenuAction mact = event.getMenuAction();
 
-        // ── Game object interactions (POH furniture, altars, portals, etc.) ──
+        // ââ Game object interactions (POH furniture, altars, portals, etc.) ââ
         // Emit as "action" events with target + option for investment savings tracking
         boolean isGameObject = (
             mact == MenuAction.GAME_OBJECT_FIRST_OPTION ||
@@ -1998,7 +1998,7 @@ public class ArianaPlugin extends Plugin
 
         if ("take".equals(category))
         {
-            // Ground item "Take" — use scene coords from event to find the correct tile
+            // Ground item "Take" â use scene coords from event to find the correct tile
             // (player clicks and WALKS to item; player's current tile may be different)
             try
             {
@@ -2022,14 +2022,14 @@ public class ArianaPlugin extends Plugin
             return; // event fires via onItemDespawned
         }
 
-        // consume / destroy → emit immediately with resolved item name
+        // consume / destroy â emit immediately with resolved item name
         String itemName = "";
         try
         {
             ItemComposition comp = itemManager.getItemComposition(itemId > 0 ? itemId : rawId);
             if (comp != null) itemName = comp.getName();
         }
-        catch (Exception e) { /* ignore — name is optional */ }
+        catch (Exception e) { /* ignore â name is optional */ }
 
         long ts = System.currentTimeMillis();
         StringBuilder sb = new StringBuilder();
@@ -2055,7 +2055,7 @@ public class ArianaPlugin extends Plugin
 
     /**
      * Queue a single EIE JSON event object (without outer braces) for the
-     * current game tick. Thread-safe — can be called from any event handler.
+     * current game tick. Thread-safe â can be called from any event handler.
      */
     private void queueEieEvent(String eventJson)
     {
