@@ -71,7 +71,7 @@ import java.util.regex.Pattern;
 public class ArianaPlugin extends Plugin
 {
     private static final String RELAY_URL = "wss://api.ariana.trade/relay/plugin";
-    private static final int PLUGIN_VERSION = 9;
+    private static final int PLUGIN_VERSION = 10;
     private static final int MESSAGE_QUEUE_MAX = 500;
     private static final long MESSAGE_QUEUE_MAX_BYTES = 10 * 1024 * 1024; // 10MB
     private static final long RECONNECT_DELAY_MS = 5_000;
@@ -884,8 +884,11 @@ public class ArianaPlugin extends Plugin
     {
         if (itemId <= 0) return;
 
-        // Try WebSocket relay first — navigates the already-open ariana.trade tab
-        // in-place (the SPA handles the navigate_item message without reload).
+        // Prefer the WebSocket relay — navigates the already-open ariana.trade tab
+        // in-place (the SPA handles the navigate_item message) and does NOT spawn
+        // a new browser tab. User switches to the tab themselves; browsers block
+        // programmatic tab focus from background contexts for security reasons,
+        // so there's no reliable way to auto-focus without creating a duplicate.
         if (relayConnected && relaySocket != null)
         {
             try
@@ -893,30 +896,27 @@ public class ArianaPlugin extends Plugin
                 String msg = "{\"type\":\"navigate_item\",\"itemId\":" + itemId + "}";
                 relaySocket.sendText(msg, true);
                 ticksSinceLastSend = 0;
-                log.info("Ariana: sent navigate_item {} via relay", itemId);
+                log.info("Ariana: sent navigate_item {} via relay (no new tab)", itemId);
+                return;
             }
             catch (Exception e)
             {
-                log.warn("Ariana: relay send failed (dead socket?), triggering reconnect: {}", e.getMessage());
-                // Socket is dead — clean up and reconnect
+                log.warn("Ariana: relay send failed (dead socket?), falling back to browser: {}", e.getMessage());
+                // Socket is dead — clean up, reconnect, and fall through to Desktop.browse
                 relaySocket = null;
                 relayConnected = false;
                 scheduleReconnect();
             }
         }
 
-        // ALWAYS invoke the OS browser, regardless of relay state. window.focus()
-        // from a WebSocket message is blocked by modern browsers for security, so
-        // the WS message alone cannot bring a backgrounded tab to the foreground.
-        // Desktop.browse() is the only reliable way to focus the browser from a
-        // non-browser Java process. If ariana.trade is already open, most browsers
-        // will navigate/focus the existing tab for the same URL; if not, a new tab
-        // is opened and the frontend's ?item= deep-link handler takes over.
+        // Fallback only: no relay connection means no ariana.trade tab is listening,
+        // so open one via the OS browser. The frontend's ?item= deep-link handler
+        // will pick it up on load.
         try
         {
             String url = "https://ariana.trade?item=" + itemId;
             java.awt.Desktop.getDesktop().browse(new java.net.URI(url));
-            log.info("Ariana: opened/focused item {} in browser", itemId);
+            log.info("Ariana: opened item {} in new browser tab (no relay)", itemId);
         }
         catch (Exception e)
         {
@@ -2101,3 +2101,4 @@ public class ArianaPlugin extends Plugin
         }
     }
 }
+                                            
