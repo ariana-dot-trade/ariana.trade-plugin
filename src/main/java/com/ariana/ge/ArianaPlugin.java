@@ -71,7 +71,7 @@ import java.util.regex.Pattern;
 public class ArianaPlugin extends Plugin
 {
     private static final String RELAY_URL = "wss://api.ariana.trade/relay/plugin";
-    private static final int PLUGIN_VERSION = 8;
+    private static final int PLUGIN_VERSION = 9;
     private static final int MESSAGE_QUEUE_MAX = 500;
     private static final long MESSAGE_QUEUE_MAX_BYTES = 10 * 1024 * 1024; // 10MB
     private static final long RECONNECT_DELAY_MS = 5_000;
@@ -884,9 +884,8 @@ public class ArianaPlugin extends Plugin
     {
         if (itemId <= 0) return;
 
-        boolean sentViaRelay = false;
-
         // Try WebSocket relay first — navigates the already-open ariana.trade tab
+        // in-place (the SPA handles the navigate_item message without reload).
         if (relayConnected && relaySocket != null)
         {
             try
@@ -894,7 +893,6 @@ public class ArianaPlugin extends Plugin
                 String msg = "{\"type\":\"navigate_item\",\"itemId\":" + itemId + "}";
                 relaySocket.sendText(msg, true);
                 ticksSinceLastSend = 0;
-                sentViaRelay = true;
                 log.info("Ariana: sent navigate_item {} via relay", itemId);
             }
             catch (Exception e)
@@ -907,21 +905,22 @@ public class ArianaPlugin extends Plugin
             }
         }
 
-        // Always open in browser as fallback — if relay worked, this just brings
-        // the existing tab to front via the ?item= deep link (ariana.trade deduplicates).
-        // If relay failed, this ensures the user still gets the item page.
-        if (!sentViaRelay)
+        // ALWAYS invoke the OS browser, regardless of relay state. window.focus()
+        // from a WebSocket message is blocked by modern browsers for security, so
+        // the WS message alone cannot bring a backgrounded tab to the foreground.
+        // Desktop.browse() is the only reliable way to focus the browser from a
+        // non-browser Java process. If ariana.trade is already open, most browsers
+        // will navigate/focus the existing tab for the same URL; if not, a new tab
+        // is opened and the frontend's ?item= deep-link handler takes over.
+        try
         {
-            try
-            {
-                String url = "https://ariana.trade?item=" + itemId;
-                java.awt.Desktop.getDesktop().browse(new java.net.URI(url));
-                log.info("Ariana: opened item {} in browser (relay unavailable)", itemId);
-            }
-            catch (Exception e)
-            {
-                log.error("Ariana: failed to open item in browser: {}", e.getMessage());
-            }
+            String url = "https://ariana.trade?item=" + itemId;
+            java.awt.Desktop.getDesktop().browse(new java.net.URI(url));
+            log.info("Ariana: opened/focused item {} in browser", itemId);
+        }
+        catch (Exception e)
+        {
+            log.error("Ariana: failed to open item in browser: {}", e.getMessage());
         }
     }
 
