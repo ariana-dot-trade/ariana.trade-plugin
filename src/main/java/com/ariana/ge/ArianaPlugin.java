@@ -71,7 +71,7 @@ import java.util.regex.Pattern;
 public class ArianaPlugin extends Plugin
 {
     private static final String RELAY_URL = "wss://api.ariana.trade/relay/plugin";
-    private static final int PLUGIN_VERSION = 10;
+    private static final int PLUGIN_VERSION = 11;
     private static final int MESSAGE_QUEUE_MAX = 500;
     private static final long MESSAGE_QUEUE_MAX_BYTES = 10 * 1024 * 1024; // 10MB
     private static final long RECONNECT_DELAY_MS = 5_000;
@@ -108,6 +108,13 @@ public class ArianaPlugin extends Plugin
     // Message queue for reconnect flush
     private final ConcurrentLinkedQueue<String> messageQueue = new ConcurrentLinkedQueue<>();
     private volatile long messageQueueBytes = 0;
+    // Queue-overflow telemetry: incremented each time queueMessage drops an old
+    // message because MESSAGE_QUEUE_MAX / MAX_BYTES is hit. Surfaced to the user
+    // via in-game chat + log once per cooldown window.
+    private volatile long queueOverflowDrops = 0;
+    private volatile long lastQueueOverflowDropAt = 0;
+    private volatile long lastQueueOverflowNotifyAt = 0;
+    private static final long QUEUE_OVERFLOW_NOTIFY_COOLDOWN_MS = 5 * 60_000L; // 5 minutes
 
     // Auto-launch guard
     private volatile boolean hasLaunchedThisSession = false;
@@ -213,6 +220,53 @@ public class ArianaPlugin extends Plugin
         log.info("ariana.trade v{} started!", PLUGIN_VERSION);
         for (int i = 0; i < 8; i++) { geOffers[i] = OfferSnapshot.EMPTY; }
         startServers();
+
+        // CRITICAL: Handle the plugin-started-while-already-logged-in case.
+        // When the user enables the plugin during an active session, onGameStateChanged
+        // will NOT fire a LOGGED_IN event (because GameState didn't change). Without this
+        // block, loggedIn stays false and playerNameReady() blocks ALL broadcasts
+        // indefinitely — the user's holdings would never sync until they logged out and
+        // back in. Detect active session and bootstrap state synchronously.
+        try
+        {
+            GameState gs = client.getGameState();
+            if (gs == GameState.LOGGED_IN || gs == GameState.HOPPING || gs == GameState.LOADING)
+            {
+                loggedIn = true;
+                nameResolutionTicks = 0;
+                try {
+                    java.util.EnumSet<WorldType> worldTypes = client.getWorldType();
+                    isMember = worldTypes != null && worldTypes.contains(WorldType.MEMBERS);
+                } catch (Exception ignored) { isMember = true; }
+
+                // Seed playerName if the client has already populated it; the onGameTick
+                // name-resolution loop will catch it otherwise (MAX_NAME_TICKS=20, ~12s).
+                if (client.getLocalPlayer() != null && client.getLocalPlayer().getName() != null)
+                {
+                    String n = client.getLocalPlayer().getName();
+                    if (n != null && !n.isEmpty() && !n.equals("???")) playerName = n;
+                }
+
+                // Pre-seed GE offers so the first broadcast after RSN resolves is complete.
+                GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
+                if (offers != null)
+                {
+                    for (int i = 0; i < offers.length && i < 8; i++)
+                        if (offers[i] != null) geOffers[i] = OfferSnapshot.from(offers[i], i);
+                    lastGeUpdate = System.currentTimeMillis();
+                }
+
+                // Schedule a delayed container read so bank/inv/equip get captured without
+                // needing the user to open them. The full "connected" payload is sent by
+                // the delayed-container or name-resolution path, gated on playerNameReady().
+                loginContainerReadCountdown = 5;
+                log.info("Ariana: startUp detected active session (GameState={}), bootstrapping.", gs);
+            }
+        }
+        catch (Exception e)
+        {
+            log.warn("Ariana: startUp active-session bootstrap failed: {}", e.getMessage());
+        }
 
         // No sidebar panel — all settings live in the wrench icon config.
         // Just add a navigation button that opens ariana.trade when clicked.
@@ -355,7 +409,11 @@ public class ArianaPlugin extends Plugin
             // Data is NOT sent here — we wait for auth_ok in onText before sending state
             try
             {
-                webSocket.sendText("{\"type\":\"auth\",\"token\":\"" + authToken + "\"}", true);
+                // JSON-escape the token — tokens are normally URL-safe base64ish, but if a
+                // user ever pastes one with stray quotes/backslashes/control chars the raw
+                // concat would produce malformed JSON and the relay would close the socket
+                // with no actionable error.
+                webSocket.sendText("{\"type\":\"auth\",\"token\":\"" + escapeJson(authToken) + "\"}", true);
                 log.info("Ariana: auth token sent, waiting for auth_ok before sending data");
             }
             catch (Exception e)
@@ -396,15 +454,26 @@ public class ArianaPlugin extends Plugin
                     messageQueueBytes = 0;
                     if (flushed > 0) log.info("Ariana: flushed {} buffered messages", flushed);
 
-                    // Send current state
-                    try
+                    // Send current state — but only if playerName is resolved. If not,
+                    // the onGameTick name-resolution path rebroadcasts a full "connected"
+                    // payload once the RSN lands, so skipping here avoids shipping data
+                    // stamped with an empty/"???" playerName that the frontend would then
+                    // mis-attribute (or drop via the _filterHoldingsForAccount guard).
+                    if (playerNameReady())
                     {
-                        String state = "{\"type\":\"connected\"," + buildAllDataInner() + "}";
-                        webSocket.sendText(state, true);
+                        try
+                        {
+                            String state = "{\"type\":\"connected\"," + buildAllDataInner() + "}";
+                            webSocket.sendText(state, true);
+                        }
+                        catch (Exception e)
+                        {
+                            log.error("Ariana: failed to send initial state: {}", e.getMessage());
+                        }
                     }
-                    catch (Exception e)
+                    else
                     {
-                        log.error("Ariana: failed to send initial state: {}", e.getMessage());
+                        log.info("Ariana: auth_ok received but playerName not ready — deferring initial state broadcast to name-resolution path");
                     }
                 }
                 else if (msg.contains("\"type\":\"auth_error\""))
@@ -448,6 +517,21 @@ public class ArianaPlugin extends Plugin
     private void handleRelayMessage(WebSocket webSocket, String msg)
     {
         log.debug("Relay message: {}", msg);
+
+        // CRITICAL: Gate container/state responses on playerNameReady(). Without this, if
+        // the frontend requests "bank" / "inventory" / "equipment" / "ge" / "all" during
+        // the LOGIN_SCREEN→LOGGED_IN→name-resolved window, we'd ship stale data (from a
+        // previous account's session) or data stamped with an empty/"???" RSN. The
+        // frontend would then associate this data with the wrong account.
+        // "health" is allowed through because it carries no container/RSN state.
+        boolean isStateful = msg.equals("bank") || msg.equals("inventory")
+                || msg.equals("equipment") || msg.equals("ge") || msg.equals("all");
+        if (isStateful && !playerNameReady())
+        {
+            try { webSocket.sendText("{\"type\":\"state_not_ready\",\"reason\":\"playerName unresolved\"}", true); } catch (Exception e) { /* ignore */ }
+            return;
+        }
+
         switch (msg)
         {
             case "health":
@@ -523,6 +607,8 @@ public class ArianaPlugin extends Plugin
             if (dropped != null)
             {
                 messageQueueBytes -= (dropped.length() * 2);
+                queueOverflowDrops++;
+                lastQueueOverflowDropAt = now;
             }
         }
 
@@ -583,13 +669,20 @@ public class ArianaPlugin extends Plugin
             log.info("Ariana: BANK container changed — updating bank data");
             updateBankData(event.getItemContainer());
             log.info("Ariana: Bank now has {} items", bankItems.size());
-            broadcast("{\"type\":\"bank\"," + buildBankInner() + "}");
+            // Only broadcast when RSN is known — otherwise data would be stamped with
+            // empty playerName and mis-attributed on the frontend. The name-resolution
+            // path in onGameTick rebroadcasts full state ("connected") once the RSN lands.
+            if (playerNameReady()) {
+                broadcast("{\"type\":\"bank\"," + buildBankInner() + "}");
+            }
         }
         else if (id == InventoryID.INVENTORY.getId())
         {
             Map<Integer, Integer> oldInv = new HashMap<>(inventoryItems);
             updateInventoryData(event.getItemContainer());
-            broadcast("{\"type\":\"inventory\"," + buildInventoryInner() + "}");
+            if (playerNameReady()) {
+                broadcast("{\"type\":\"inventory\"," + buildInventoryInner() + "}");
+            }
 
             // EIE: Compute inventory diff for ConsumptionEngine
             if (!oldInv.isEmpty()) // Skip first observation (no previous state)
@@ -636,7 +729,9 @@ public class ArianaPlugin extends Plugin
         {
             Map<String, int[]> oldEquip = new HashMap<>(equipmentSlots);
             updateEquipmentData(event.getItemContainer());
-            broadcast("{\"type\":\"equipment\"," + buildEquipmentInner() + "}");
+            if (playerNameReady()) {
+                broadcast("{\"type\":\"equipment\"," + buildEquipmentInner() + "}");
+            }
 
             // EIE: Emit equipment change event for ChargeTracker / DegradationTracker
             int[] oldWeapon = oldEquip.get("WEAPON");
@@ -690,7 +785,9 @@ public class ArianaPlugin extends Plugin
             geOffers[slot].totalQuantity, geOffers[slot].price,
             geOffers[slot].quantityFilled, geOffers[slot].totalQuantity);
 
-        broadcast("{\"type\":\"ge\"," + buildGeInner() + "}");
+        if (playerNameReady()) {
+            broadcast("{\"type\":\"ge\"," + buildGeInner() + "}");
+        }
 
         // Update sidebar panel with current offers
         // offers updated (sent via relay)
@@ -748,7 +845,14 @@ public class ArianaPlugin extends Plugin
             // We read them a few ticks later in onGameTick when the client has fully loaded.
             loginContainerReadCountdown = 5; // 5 game ticks (~3 seconds)
 
-            broadcast("{\"type\":\"login\"," + buildAllDataInner() + "}");
+            // Only send the initial login broadcast when the RSN is already known.
+            // Otherwise defer — the onGameTick name-resolution path broadcasts a full
+            // "connected" message once the name resolves, and the countdown-5 delayed
+            // container read re-broadcasts after containers load. This avoids sending
+            // data with an empty playerName that would be mis-attributed.
+            if (playerNameReady()) {
+                broadcast("{\"type\":\"login\"," + buildAllDataInner() + "}");
+            }
 
             // Auto-launch Ariana on login if configured (once per session)
             if (config.autoLaunchOnLogin())
@@ -781,6 +885,21 @@ public class ArianaPlugin extends Plugin
             prevMaxPrayer = -1;
             prevSpecPercent = -1;
             prevRunePouchSnapshot = "";
+
+            // CRITICAL: Clear container state so account A's holdings don't bleed into
+            // account B on the next login. Without this, if the user logs out of account A
+            // and into account B, the plugin would briefly hold A's bank/inv/equip/GE in
+            // memory and could broadcast it stamped with B's (or empty) RSN before the new
+            // account's containers are read. playerNameReady() gating helps, but defense-
+            // in-depth: never carry container state across a LOGIN_SCREEN transition.
+            bankItems = new HashMap<>();
+            inventoryItems = new HashMap<>();
+            equipmentSlots = new HashMap<>();
+            for (int i = 0; i < 8; i++) { geOffers[i] = OfferSnapshot.EMPTY; }
+            lastBankUpdate = 0;
+            lastInventoryUpdate = 0;
+            lastEquipmentUpdate = 0;
+            lastGeUpdate = 0;
         }
     }
 
@@ -949,8 +1068,11 @@ public class ArianaPlugin extends Plugin
                     playerName = name;
                     nameResolutionTicks = MAX_NAME_TICKS;
                     log.debug("Player name resolved on tick {}: {}", nameResolutionTicks, playerName);
-                    // RSN resolved (no panel)
-                    broadcast("{\"type\":\"health\"," + buildHealthInner() + "}");
+                    // RSN resolved — send a full "connected" payload (health + ge +
+                    // bank/inv/equip snapshot) so the frontend gets the complete state
+                    // under the correct RSN. Prior broadcasts may have been deferred
+                    // because playerName was empty; this is the catch-up.
+                    broadcast("{\"type\":\"connected\"," + buildAllDataInner() + "}");
                 }
             }
         }
@@ -980,6 +1102,30 @@ public class ArianaPlugin extends Plugin
                 {
                     broadcast("{\"type\":\"connected\"," + buildAllDataInner() + "}");
                 }
+            }
+        }
+
+        // --- Queue overflow notification (client-thread safe) ---
+        // If queueMessage has been dropping buffered events because the plugin has been
+        // offline too long or generated too much data, surface a single in-game chat
+        // warning per cooldown window so the user knows their queued events were shed
+        // rather than silently lost.
+        if (queueOverflowDrops > 0 && loggedIn)
+        {
+            long nowMs = System.currentTimeMillis();
+            if (nowMs - lastQueueOverflowNotifyAt > QUEUE_OVERFLOW_NOTIFY_COOLDOWN_MS)
+            {
+                lastQueueOverflowNotifyAt = nowMs;
+                long drops = queueOverflowDrops;
+                queueOverflowDrops = 0;
+                try
+                {
+                    client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
+                        "[Ariana] " + drops + " buffered event(s) were dropped while offline — " +
+                        "reconnect to ariana.trade to resume live tracking.", null);
+                }
+                catch (Exception e) { /* ignore — logger is the fallback */ }
+                log.warn("Ariana: dropped {} buffered message(s) due to queue overflow", drops);
             }
         }
 
@@ -1031,23 +1177,33 @@ public class ArianaPlugin extends Plugin
         }
 
         // --- EIE: Flush tick buffer ---
+        // Defensive: only flush when RSN is resolved. queueEieEvent already drops
+        // events when not ready, but if state transitioned after queueing we'd
+        // rather discard than flush with an unknown RSN.
         if (!tickBuffer.isEmpty())
         {
-            StringBuilder batch = new StringBuilder("{\"type\":\"eie_batch\",\"tick\":");
-            batch.append(client.getTickCount());
-            batch.append(",\"playerName\":\"").append(escapeJson(playerName)).append("\"");
-            batch.append(",\"inCombat\":").append(inCombat);
-            batch.append(",\"events\":[");
-            for (int i = 0; i < tickBuffer.size(); i++)
+            if (!playerNameReady())
             {
-                if (i > 0) batch.append(",");
-                batch.append("{");
-                batch.append(tickBuffer.get(i));
-                batch.append("}");
+                tickBuffer.clear();
             }
-            batch.append("]}");
-            broadcast(batch.toString());
-            tickBuffer.clear();
+            else
+            {
+                StringBuilder batch = new StringBuilder("{\"type\":\"eie_batch\",\"tick\":");
+                batch.append(client.getTickCount());
+                batch.append(",\"playerName\":\"").append(escapeJson(playerName)).append("\"");
+                batch.append(",\"inCombat\":").append(inCombat);
+                batch.append(",\"events\":[");
+                for (int i = 0; i < tickBuffer.size(); i++)
+                {
+                    if (i > 0) batch.append(",");
+                    batch.append("{");
+                    batch.append(tickBuffer.get(i));
+                    batch.append("}");
+                }
+                batch.append("]}");
+                broadcast(batch.toString());
+                tickBuffer.clear();
+            }
         }
     }
 
@@ -2053,11 +2209,31 @@ public class ArianaPlugin extends Plugin
     }
 
     /**
+     * Returns true only when playerName is resolved to a real RSN.
+     * During the window between LOGIN_SCREEN → LOGGED_IN → name resolution
+     * (can be up to 20 ticks), playerName is "" or "???" and any event stamped
+     * with that value would contaminate another account's holdings on the frontend.
+     */
+    private boolean playerNameReady()
+    {
+        return loggedIn
+            && playerName != null
+            && !playerName.isEmpty()
+            && !playerName.equals("???");
+    }
+
+    /**
      * Queue a single EIE JSON event object (without outer braces) for the
      * current game tick. Thread-safe — can be called from any event handler.
+     * Drops events whose RSN attribution is unknown — better to lose a single
+     * tick of XP/inv-change data than to attribute it to the wrong account.
      */
     private void queueEieEvent(String eventJson)
     {
+        if (!playerNameReady()) {
+            // RSN not yet resolved (inter-login window). Drop rather than contaminate.
+            return;
+        }
         // Inject playerName into every event for account attribution
         String withPlayer = eventJson + ",\"playerName\":\"" + escapeJson(playerName) + "\"";
         tickBuffer.add(withPlayer);
